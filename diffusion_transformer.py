@@ -24,9 +24,8 @@ class TokenDiffusionModel(nn.Module):
         batch_size, seq_len = input_tokens.size()
 
         # Add noise to the input tokens
-        noisy_tokens = input_tokens + torch.randn_like(input_tokens) * self.noise_std
 
-        x = self.embedding(noisy_tokens)  # Shape: (batch_size, seq_len, embedding_dim)
+        x = self.embedding(input_tokens)  # Shape: (batch_size, seq_len, embedding_dim)
         memory = x
 
         for i in range(self.num_iterations):
