@@ -1,48 +1,62 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
+class GuidedAttentionLayer(nn.Module):
+    def __init__(self, embed_dim, num_heads):
+        super().__init__()
+        self.multihead_attn = nn.MultiheadAttention(embed_dim, num_heads)
+        
+    def forward(self, x, context):
+        # Apply multihead attention with a residual connection
+        attn_output, _ = self.multihead_attn(x, context, context)
+        x = x + attn_output  # Residual connection
+        return x
+    
+class TextDiffusionModel(nn.Module):
+    def __init__(self, vocab_size, embed_dim, max_seq_length, num_steps, num_heads=8):
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, embed_dim)
+        self.position_encoding = nn.Parameter(torch.randn(1, max_seq_length, embed_dim))
+        self.num_steps = num_steps
+        
+        # Transformer encoder
+        self.transformer_encoder = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=num_heads)
+        
+        # Guided attention layer
+        self.guided_attention = GuidedAttentionLayer(embed_dim, num_heads)
+        
+        # Noise predictor
+        self.noise_predictor = nn.Linear(embed_dim, embed_dim)
+        
+    def add_noise(self, x, t):
+        alphas = self.noise_schedule(t).view(-1, 1, 1)
+        noise = torch.randn_like(x)
+        noised_x = alphas.sqrt() * x + (1 - alphas).sqrt() * noise
+        return noised_x, noise
+    
+    def noise_schedule(self, t):
+        return 1 - (t / self.num_steps)
+    
+    def forward(self, tokens, t):
+        # Get original embeddings
+        original_embed = self.embedding(tokens) + self.position_encoding[:, :tokens.shape[1], :]
+        
+        # Add noise
+        noised_x, noise = self.add_noise(original_embed, t)
+        
+        # Reshape for batch processing
+        batch_size, seq_len, embed_dim = noised_x.shape
+        noised_x = noised_x.view(batch_size, seq_len, embed_dim)
+        original_embed = original_embed.view(batch_size, seq_len, embed_dim)
 
-class TokenDiffusionModel(nn.Module):
-    def __init__(self, vocab_size, embedding_dim, hidden_dim, num_layers, nhead, max_seq_len, num_iterations, noise_std=0.1, dropout=0.1):
-        super(TokenDiffusionModel, self).__init__()
-        self.embedding = nn.Embedding(vocab_size, embedding_dim)
+        # Apply guided attention
+        guided_x = self.guided_attention(noised_x, original_embed)
         
-        # Transformer decoder layers
-        self.transformer_decoder_layer = nn.TransformerDecoderLayer(
-            d_model=embedding_dim,
-            nhead=nhead,
-            dim_feedforward=hidden_dim,
-            dropout=dropout
-        )
+        # Pass through transformer encoder
+        encoded = self.transformer_encoder(guided_x)
         
-        self.transformer_decoder = nn.TransformerDecoder(
-            self.transformer_decoder_layer,
-            num_layers=num_layers
-        )
+        # Predict the noise
+        predicted_noise = self.noise_predictor(encoded)
         
-        self.output_projection = nn.Linear(embedding_dim, vocab_size)
-        self.max_seq_len = max_seq_len
-        self.num_iterations = num_iterations
-        self.noise_std = noise_std
-
-    def forward(self, input_tokens, tgt_mask=None):
-        batch_size, seq_len = input_tokens.size()
-
-        # Embedding the input tokens
-        token_embeddings = self.embedding(input_tokens)  # Shape: (batch_size, seq_len, embedding_dim)
-        
-        # Start with random noise
-        x = torch.randn(batch_size, seq_len, self.embedding.embedding_dim).to(self.embedding.weight.device)
-        
-        for i in range(self.num_iterations):
-            # Noise decreases over iterations
-            noise_std = self.noise_std * (1 - i / (self.num_iterations - 1))
-            x = x + torch.randn_like(x) * noise_std
-
-            # Condition the denoising process on the token embeddings
-            x = self.transformer_decoder(tgt=x, memory=token_embeddings, tgt_mask=tgt_mask)
-
-        # Final projection to vocabulary size
-        logits = self.output_projection(x)  # Shape: (batch_size, seq_len, vocab_size)
-        
-        return logits
+        return predicted_noise, noise
