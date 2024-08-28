@@ -28,6 +28,7 @@ class TextDiffusionModel(nn.Module):
         
         # Noise predictor
         self.noise_predictor = nn.Linear(embed_dim, embed_dim)
+
         
     def add_noise(self, x, t):
         alphas = self.noise_schedule(t).view(-1, 1, 1)
@@ -37,6 +38,28 @@ class TextDiffusionModel(nn.Module):
     
     def noise_schedule(self, t):
         return 1 - (t / self.num_steps)
+    
+    def generate(self, tokens, t):
+        #same as forward but without the embedding part
+
+        # Add noise
+        noised_x, noise = self.add_noise(tokens, t)
+
+        # Reshape for batch processing
+        batch_size, seq_len, embed_dim = noised_x.shape
+        noised_x = noised_x.view(batch_size, seq_len, embed_dim)
+        tokens = tokens.view(batch_size, seq_len, embed_dim)
+        
+        # Apply guided attention
+        guided_x = self.guided_attention(noised_x, tokens)
+
+        # Pass through transformer encoder
+        encoded = self.transformer_encoder(guided_x)
+
+        # Predict the noise
+        predicted_noise = self.noise_predictor(encoded)
+        
+        return predicted_noise, noise
     
     def forward(self, tokens, t):
         # Get original embeddings

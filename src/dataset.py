@@ -56,6 +56,5 @@ class TinyShakespeareDataset(Dataset):
         # noisy_seq = self.apply_noise(clean_seq)
         
         #for now lets return the following seq_len characters
-        noisy_seq = self.text[idx + self.seq_len : idx + 2*self.seq_len]
-        noisy_seq = torch.tensor(noisy_seq)
+        noisy_seq = clean_seq.clone()
         return noisy_seq, clean_seq
